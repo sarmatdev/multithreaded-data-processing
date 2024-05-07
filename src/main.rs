@@ -1,23 +1,27 @@
-use std::thread;
+#![feature(test)]
+extern crate test;
 
-fn process_data(input: Vec<u64>, k: u64, threshold: usize) -> Vec<u64> {
+use std::thread;
+use std::thread::available_parallelism;
+
+fn process_data<T, R>(input: Vec<T>, threshold: usize, k: u64, func: fn(T, u64) -> R) -> Vec<R>
+where
+    T: Clone + Send + 'static,
+    R: Send + 'static,
+{
     if input.len() <= threshold {
-        return input
-            .into_iter()
-            .map(|n| transform_data(n, k))
-            .collect::<Vec<u64>>();
+        return input.into_iter().map(|n| func(n, k)).collect::<Vec<R>>();
     }
 
+    let threads_num = available_parallelism().unwrap().get();
+    let chunk_size = (input.len() + threads_num - 1) / threads_num;
     let mut handles = vec![];
-    for chunk in input.chunks(threshold) {
+
+    for chunk in input.chunks(chunk_size) {
         let chunk = chunk.to_vec();
-        let handler = thread::spawn(move || {
-            chunk
-                .into_iter()
-                .map(|n| transform_data(n, k))
-                .collect::<Vec<u64>>()
-        });
-        handles.push(handler);
+        let handle =
+            thread::spawn(move || chunk.into_iter().map(|n| func(n, k)).collect::<Vec<R>>());
+        handles.push(handle);
     }
 
     let mut result = vec![];
@@ -50,11 +54,10 @@ fn transform_data(n: u64, k: u64) -> u64 {
 }
 
 fn main() {
-    let numbers = vec![1, 2, 3, 100];
-    let threshold = 1;
+    let input = vec![1, 2, 3, 100];
+    let threshold = 2;
     let k = 8;
-
-    let result = process_data(numbers, k, threshold);
+    let result = process_data(input, threshold, k, transform_data);
     println!("{:?}", result); // [0, 1, 7, 88]
 }
 
@@ -64,39 +67,70 @@ mod tests {
 
     #[test]
     fn test_transform_data() {
-        assert_eq!(transform_data(1, 8), 0);
-        assert_eq!(transform_data(2, 8), 1);
-        assert_eq!(transform_data(3, 8), 7);
-        assert_eq!(transform_data(100, 8), 88);
+        let k = 8;
+        assert_eq!(transform_data(1, k), 0);
+        assert_eq!(transform_data(2, k), 1);
+        assert_eq!(transform_data(3, k), 7);
+        assert_eq!(transform_data(100, k), 88);
     }
 
     #[test]
-    fn test_process_data_single_thread() {
-        let numbers = vec![1, 2, 3, 100];
+    pub fn test_process_data_single_thread() {
+        let input = vec![1, 2, 3, 100];
         let threshold = 5;
         let k = 8;
-        let result = process_data(numbers.clone(), k, threshold);
+        let result = process_data(input, threshold, k, transform_data);
         let expected_result = vec![0, 1, 7, 88];
         assert_eq!(result, expected_result);
     }
 
     #[test]
-    fn test_process_data_multi_thread() {
-        let numbers = vec![1, 2, 3, 100];
+    pub fn test_process_data_multi_thread() {
+        let input = vec![1, 2, 3, 100];
         let threshold = 2;
         let k = 8;
-        let result = process_data(numbers.clone(), k, threshold);
+        let result = process_data(input, threshold, k, transform_data);
         let expected_result = vec![0, 1, 7, 88];
         assert_eq!(result, expected_result);
     }
 
     #[test]
     fn test_process_data_multi_thread_with_larger_input() {
-        let numbers = vec![1, 2, 3, 100, 267, 423];
+        let input = vec![1, 2, 3, 100, 267, 423];
         let threshold = 2;
         let k = 10;
-        let result = process_data(numbers.clone(), k, threshold);
+        let result = process_data(input, threshold, k, transform_data);
         let expected_result = vec![0, 1, 7, 22, 340, 3220];
         assert_eq!(result, expected_result);
+    }
+
+    #[test]
+    pub fn test_process_data_multi_thread_heavy_loaded() {
+        let input = (0u64..100_000).collect::<Vec<u64>>();
+        let threshold = 500;
+        let k = 20;
+        let result = process_data(input, threshold, k, transform_data);
+        assert_eq!(result.len(), 100_000);
+    }
+}
+
+#[cfg(test)]
+mod benchmarks {
+    use crate::tests::*;
+    use test::Bencher;
+
+    #[bench]
+    fn bench_single_thread_processing(b: &mut Bencher) {
+        b.iter(|| test_process_data_single_thread());
+    }
+
+    #[bench]
+    fn bench_multi_thread_processing(b: &mut Bencher) {
+        b.iter(|| test_process_data_multi_thread());
+    }
+
+    #[bench]
+    fn bench_heavy_loaded_multi_thread_processing(b: &mut Bencher) {
+        b.iter(|| test_process_data_multi_thread_heavy_loaded());
     }
 }
